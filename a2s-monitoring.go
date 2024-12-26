@@ -25,8 +25,8 @@ type jsonExporter struct {
 	info      a2cInfo
 }
 
-func (self *jsonExporter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	queryInfo, err := self.a2sClient.QueryInfo()
+func (e *jsonExporter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	queryInfo, err := e.a2sClient.QueryInfo()
 
 	if err != nil {
 		log.Printf("error getting server info: %v", err)
@@ -35,13 +35,13 @@ func (self *jsonExporter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	self.info.ServerInfo = queryInfo
-	if self.info.ServerInfo.Players > 0 {
-		self.info.LastPlayerSeen = time.Now()
+	e.info.ServerInfo = queryInfo
+	if e.info.ServerInfo.Players > 0 {
+		e.info.LastPlayerSeen = time.Now()
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(self.info)
+	json.NewEncoder(w).Encode(e.info)
 }
 
 func NewJsonExporter(client *a2s.Client) *jsonExporter {
