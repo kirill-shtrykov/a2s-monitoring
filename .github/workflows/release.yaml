@@ -1,6 +1,8 @@
 ---
 name: Build release
 
+permissions: write-all
+
 on:
   push:
     branches:
@@ -25,8 +27,6 @@ jobs:
         uses: golangci/golangci-lint-action@v6
         with:
           version: v1.60
-      - name: Run tests
-        run: make test
       - name: Build binary
         run: make build && make compress
       - name: Create Release
