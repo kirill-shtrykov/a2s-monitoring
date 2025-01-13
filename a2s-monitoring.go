@@ -3,102 +3,156 @@ package main
 import (
 	"encoding/json"
 	"flag"
-	"fmt"
-	"log"
+	log "log/slog"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	a2s "github.com/rumblefrog/go-a2s"
 )
 
+const (
+	defaultListenAddr = ":9112"
+	defaultA2SAddr    = "127.0.0.1:27015"
+)
+
+// setupLogging enables logging debug mode.
+func setupLogging(debug bool) {
+	if debug {
+		log.SetLogLoggerLevel(log.LevelDebug)
+		log.Debug("debug mode on")
+	}
+}
+
 type a2cInfo struct {
-	ServerInfo *a2s.ServerInfo
+	ServerInfo *a2s.ServerInfo `json:"ServerInfo"`
 
 	// Time when last player was seen
 	LastPlayerSeen time.Time `json:"LastPlayerSeen,omitempty"`
 }
 
-type jsonExporter struct {
+type JSONExporter struct {
 	a2sClient *a2s.Client
-	info      a2cInfo
+	Info      a2cInfo `json:"info"`
 }
 
-func (e *jsonExporter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (e *JSONExporter) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 	queryInfo, err := e.a2sClient.QueryInfo()
-
 	if err != nil {
-		log.Printf("error getting server info: %v", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		fmt.Fprint(w, "500 Internal Server Error")
+		log.Error("error getting server info:", "error", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+
 		return
 	}
 
-	e.info.ServerInfo = queryInfo
-	if e.info.ServerInfo.Players > 0 {
-		e.info.LastPlayerSeen = time.Now()
+	e.Info.ServerInfo = queryInfo
+	if e.Info.ServerInfo.Players > 0 {
+		e.Info.LastPlayerSeen = time.Now()
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(e.info)
+
+	if err := json.NewEncoder(w).Encode(e.Info); err != nil {
+		log.Error("failed to encode JSON:", "error", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+
+		return
+	}
 }
 
-func NewJsonExporter(client *a2s.Client) *jsonExporter {
-	return &jsonExporter{a2sClient: client}
+func NewJSONExporter(client *a2s.Client) *JSONExporter {
+	return &JSONExporter{a2sClient: client}
 }
 
-// Retrieves the value of the environment variable named by the `key`
-// It returns the value if variable present and value not empty
-// Otherwise it returns string value `def`
+// Retrieves the value of the environment variable named by the `key`.
+// It returns the value if variable present and value not empty.
+// Otherwise it returns string value `def`.
 func stringFromEnv(key string, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return strings.TrimSpace(v)
 	}
+
 	return def
 }
 
-func Run() int {
+// boolFromEnv retrieves the value of the environment variable named by the `key`.
+// It returns the boolean value of the variable if present and valid.
+// Otherwise, it returns the default value `def`.
+func boolFromEnv(key string, def bool) bool {
+	if v := os.Getenv(key); v != "" {
+		parsed, err := strconv.ParseBool(strings.TrimSpace(v))
+		if err == nil {
+			return parsed
+		}
+	}
+
+	return def
+}
+
+// Flags represents a command line parameters.
+type Flags struct {
+	addr   string // The address to which HTTP server will bind.
+	server string // The server address to monitoring.
+	debug  bool   // Enables debug mode.
+}
+
+func parseFlags() *Flags {
 	addrHelpText := `
 The address to listen.
 Overrides the A2SMON_ADDR environment variable if set.
 Default = :9112
 	`
-	statHelpText := `
+	serverHelpText := `
 The path to the server status.
 Overrides the A2SMON_STATUS environment variable if set.
 Default = /status
 	`
-	serverHelpText := `
-The server address to monitoring.
-Overrides the A2SMON_SERVER environment variable if set.
-Default = :27015
+	debugHelpText := `
+Enables debug mode.
+Overrides the A2SMON_DEBUG environment variable if set.
+Default = false
 	`
 
-	addr := flag.String("address", stringFromEnv("A2SMON_ADDR", ":9112"), strings.TrimSpace(addrHelpText))
-	stat := flag.String("status", stringFromEnv("A2SMON_STATUS", "/status"), strings.TrimSpace(statHelpText))
-	server := flag.String("server", stringFromEnv("A2SMON_SERVER", ":27015"), strings.TrimSpace(serverHelpText))
+	flags := &Flags{
+		addr:   stringFromEnv("A2SMON_ADDR", defaultListenAddr),
+		server: stringFromEnv("A2SMON_SERVER", defaultA2SAddr),
+		debug:  boolFromEnv("A2SMON_DEBUG", false),
+	}
 
-	c, err := a2s.NewClient(*server)
+	flag.StringVar(&flags.addr, "address", flags.addr, strings.TrimSpace(addrHelpText))
+	flag.StringVar(&flags.server, "path", flags.server, strings.TrimSpace(serverHelpText))
+	flag.BoolVar(&flags.debug, "debug", flags.debug, strings.TrimSpace(debugHelpText))
+	flag.Parse()
+
+	return flags
+}
+
+func Run() int {
+	log.Info("starting A2S Monitoring")
+
+	flags := parseFlags()
+
+	setupLogging(flags.debug)
+
+	log.Debug("create A2S client", "server", flags.server)
+
+	c, err := a2s.NewClient(flags.server)
 	if err != nil {
-		log.Printf("error creating A2S client: %v", err)
+		log.Error("error creating A2S client:", "error", err)
+
 		return 1
 	}
 
-	e := NewJsonExporter(c)
-	http.Handle(*stat, e)
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`<html>
-             <head><title>A2S Server Monitoring</title></head>
-             <body>
-             <h1>A2S Server Monitoring</h1>
-             <p><a href='` + *stat + `'>Status</a></p>
-             </body>
-             </html>`))
-	})
+	e := NewJSONExporter(c)
+	http.Handle("/", e)
 
-	if err := http.ListenAndServe(*addr, nil); err != nil {
-		log.Printf("error starting HTTP server: %v", err)
+	log.Debug("create HTTP server", "address", flags.addr)
+
+	if err := http.ListenAndServe(flags.addr, nil); err != nil {
+		log.Error("error starting HTTP server:", "error", err)
+
 		return 1
 	}
 
