@@ -44,6 +44,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: build/a2s-monitoring-$(VERSION)-linux-amd64.gz
-          asset_name: a2s-monitoring-$(VERSION)-linux-amd64.gz
+          asset_path: build/a2s-monitoring-${{ env.VERSION }}-linux-amd64.gz
+          asset_name: a2s-monitoring-${{ env.VERSION }}-linux-amd64.gz
           asset_content_type: application/gzip
